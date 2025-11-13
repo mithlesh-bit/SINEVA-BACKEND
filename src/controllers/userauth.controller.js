@@ -34,6 +34,19 @@ exports.sendOtp = async (req, res) => {
       { upsert: true, new: true }
     );
 
+    // Simple email validation regex
+    const isValidEmail = (email) => {
+      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return regex.test(email);
+    };
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Not a valid email',
+      });
+    }
+
     await sendOTP(email, otp);
     await cleanupQueue.add('delete-unverified', { email }, { delay: 10 * 60 * 1000 });
 
@@ -72,13 +85,13 @@ exports.verifyOtp = async (req, res) => {
     user.otp = null;
     await user.save();
 
-    console.log( process.env.JWT_SECRET );
+    console.log(process.env.JWT_SECRET);
     const token = jwt.sign(
       { userId: user._id, email: user.email },
-      process.env.JWT_SECRET ,
+      process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
-    
+
 
     res.status(200).json({
       success: true,
