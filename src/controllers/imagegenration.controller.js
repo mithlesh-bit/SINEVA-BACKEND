@@ -26,70 +26,50 @@ exports.createImage = async (req, res) => {
     const { prompt: rawPrompt, imageUrl: providedImageUrl } = req.body; // note rawPrompt may be empty
     const file = req.file;
 
-    console.log("===== CREATE IMAGE REQUEST =====");
-    console.log("Raw prompt:", rawPrompt);
-    console.log("Provided imageUrl (from frontend/upload):", providedImageUrl);
-    console.log("Uploaded file:", file ? file.originalname : "No file uploaded");
-    console.log("User ID:", req.user?.userId);
+    // console.log("===== CREATE IMAGE REQUEST =====");
+    // console.log("Raw prompt:", rawPrompt);
+    // console.log("Provided imageUrl (from frontend/upload):", providedImageUrl);
+    // console.log("Uploaded file:", file ? file.originalname : "No file uploaded");
+    // console.log("User ID:", req.user?.userId);
 
     if (!rawPrompt && !file && !providedImageUrl) {
       return res.status(400).json({ success: false, message: "Prompt or image is required" });
     }
 
-    // finalImageUrl will hold either the uploaded / provided image URL (old image)
-    // or the newly generated image (when prompt triggers Gemini)
     let finalImageUrl = null;
-
-    // base64Image/mimeType used only if we need to call Gemini with image inline
     let base64Image = null;
     let mimeType = null;
 
-    // ---------- Step A: If file uploaded, upload to Cloudinary and treat as "old" image
     if (file) {
-      console.log("📁 User uploaded a local file -> uploading to Cloudinary...");
       const base64Data = `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
       const uploadedUrl = await uploadToCloudinary(base64Data);
-      console.log("✅ File uploaded, uploadedUrl:", uploadedUrl);
+      // console.log("File uploaded, uploadedUrl:", uploadedUrl);
 
-      // Use uploadedUrl as the provided (old) image URL
       finalImageUrl = uploadedUrl;
 
-      // prepare inline base64 for Gemini editing if prompt present
       base64Image = file.buffer.toString("base64");
       mimeType = file.mimetype;
     }
 
-    // ---------- Step B: If frontend provided imageUrl (uploaded earlier by separate endpoint or external),
-    // use it as the old image and prepare base64 for Gemini editing
     if (!finalImageUrl && providedImageUrl) {
-      console.log("🌐 Using provided imageUrl. Converting to base64 for editing (if needed)...");
+      // console.log(" Using provided imageUrl. Converting to base64 for editing (if needed)...");
       finalImageUrl = providedImageUrl;
       const result = await urlToBase64(finalImageUrl);
       base64Image = result.data;
       mimeType = result.mimeType;
-      console.log("✅ Provided image converted to base64");
+      // console.log("Provided image converted to base64");
     }
 
-    // ---------- Build prompt string that will be stored in DB:
-    // If an "old" image exists (finalImageUrl from file or provided), store it AS A PREFIX in the prompt field
-    // promptInDb = "<oldImageUrl> <userPromptText>"  (if user provided rawPrompt)
-    // If no old image, promptInDb = rawPrompt or empty string
     const userPromptText = (rawPrompt || "").trim();
     let promptInDb = userPromptText;
     if (finalImageUrl) {
-      // ensure single space separation and that URL is first
       promptInDb = `${finalImageUrl} ${userPromptText}`.trim();
     }
 
-    // ---------- Step C: If prompt exists and Gemini needs to be called for generation/editing:
-    // If base64Image exists -> editing; if not and prompt exists -> generation.
     if (userPromptText) {
-      console.log(`🤖 Will ${base64Image ? "edit" : "generate"} via Gemini for prompt: "${userPromptText}"`);
-
-      // assemble parts for Gemini request
+      // console.log(` Will ${base64Image ? "edit" : "generate"} via Gemini for prompt: "${userPromptText}"`);
       const parts = [];
       if (base64Image) {
-        // inline image data for editing
         parts.push({ inlineData: { data: base64Image, mimeType: mimeType || "image/jpeg" } });
       }
       parts.push({ text: userPromptText });
@@ -101,9 +81,9 @@ exports.createImage = async (req, res) => {
       );
 
       const candidate = geminiResp.data?.candidates?.[0];
-      console.log("Gemini candidate:", candidate);
+      // console.log("Gemini candidate:", candidate);
       if (!candidate) {
-        console.log("❌ Gemini returned no candidate");
+        // console.log("Gemini returned no candidate");
         return res.status(500).json({ success: false, message: "No candidates returned" });
       }
 
@@ -116,7 +96,7 @@ exports.createImage = async (req, res) => {
 
       const textPart = candidate.content?.parts?.find(p => p.text);
       if (!generatedImageBase64 && textPart) {
-        console.log("📝 Gemini returned text instead of image:", textPart.text);
+        // console.log("Gemini returned text instead of image:", textPart.text);
         return res.status(200).json({
           success: false,
           message: "The model returned text instead of an image. Try rephrasing your prompt.",
@@ -125,30 +105,23 @@ exports.createImage = async (req, res) => {
       }
 
       if (!generatedImageBase64) {
-        console.log("❌ No image found in Gemini response", candidate);
+        // console.log("No image found in Gemini response", candidate);
         return res.status(500).json({ success: false, message: "No image found in Gemini response", data: candidate });
       }
-
-      // upload generated image to Cloudinary -> this becomes the NEW imageUrl in DB
       const uploadData = `data:image/png;base64,${generatedImageBase64}`;
       const generatedUrl = await uploadToCloudinary(uploadData);
-      console.log("✅ Gemini generated image uploaded, generatedUrl:", generatedUrl);
-
-      // set finalImageUrl to the generated image (we will save it in imageUrl field)
+      // console.log("Gemini generated image uploaded, generatedUrl:", generatedUrl);
       finalImageUrl = generatedUrl;
-    } // end Gemini block
+    } 
 
-    // ---------- Step D: Save to DB
-    console.log("💾 Saving prompt (with old-uploaded-url prefix if any) and final imageUrl into MongoDB...");
-    // find by same user and exact promptInDb (keep your previous behavior)
     let existingImage = await Image.findOne({ user: req.user.userId, prompt: promptInDb });
 
     if (existingImage) {
-      console.log("🔄 Found existing record for user+promptInDb — updating imageUrl to generated/used finalImageUrl");
+      // console.log(" Found existing record for user+promptInDb — updating imageUrl to generated/used finalImageUrl");
       existingImage.imageUrl = finalImageUrl;
       await existingImage.save();
     } else {
-      console.log("➕ Creating new image record (promptInDb + finalImageUrl)");
+      // console.log("Creating new image record (promptInDb + finalImageUrl)");
       existingImage = new Image({
         user: req.user.userId,
         prompt: promptInDb,
@@ -157,39 +130,28 @@ exports.createImage = async (req, res) => {
       await existingImage.save();
     }
 
-    console.log("✅ Saved:", existingImage);
-
-    // Respond with both values so frontend can show uploaded image (trim from prompt) and generated image
+    // console.log("Saved:", existingImage);
     return res.status(201).json({
       success: true,
       message: "Image saved successfully",
       data: {
         id: existingImage._id,
-        prompt: existingImage.prompt,   // contains "<oldImageUrl> <userText>" if old image existed
-        imageUrl: existingImage.imageUrl // generated / final image
+        prompt: existingImage.prompt,   
+        imageUrl: existingImage.imageUrl
       }
     });
 
   } catch (err) {
-    console.error("🔥 [CREATE IMAGE] Error:", err.response?.data || err.message || err);
+    console.error("[CREATE IMAGE] Error:", err.response?.data || err.message || err);
     return res.status(500).json({ success: false, message: "Internal server error", error: err.message || err });
   }
 };
 
 
-
-
-/**
- * Update image endpoint
- * Handles:
- * 1️⃣ Local file upload
- * 2️⃣ External image URL
- * 3️⃣ Text update
- */
 exports.updateImage = async (req, res) => {
   try {
-    const { text, imageUrl } = req.body; // text or external URL
-    const { id } = req.params; // Image ID to update
+    const { text, imageUrl } = req.body; 
+    const { id } = req.params;
     const file = req.file;
     let uploadedImageUrl = null;
 
@@ -197,18 +159,15 @@ exports.updateImage = async (req, res) => {
       return res.status(400).json({ success: false, message: "Text or image is required" });
     }
 
-    // 1️⃣ Handle local file upload
     if (file) {
       const base64Data = `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
       uploadedImageUrl = await uploadToCloudinary(base64Data);
     }
 
-    // 2️⃣ Handle provided image URL
     if (imageUrl) {
       uploadedImageUrl = imageUrl;
     }
 
-    // 3️⃣ Update existing record
     const updatedImage = await Image.findByIdAndUpdate(
       id,
       { prompt: text || undefined, imageUrl: uploadedImageUrl || undefined },
