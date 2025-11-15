@@ -296,3 +296,87 @@ exports.getImagesByUser = async (req, res) => {
     });
   }
 };
+
+
+exports.generatePrompts = async (req, res) => {
+  try {
+    const { details } = req.body;
+
+    if (!details) {
+      return res.status(400).json({
+        success: false,
+        message: "details is required"
+      });
+    }
+
+    const parts = [
+      {
+        text: `You are an expert AI prompt generator. 
+Using the user's input: "${details}", generate EXACTLY 3 highly detailed image prompts.
+
+Rules:
+1. Output must be ONLY a valid JSON array of 3 strings.
+2. No markdown, no labels, no explanations.
+3. Each prompt should be 1–2 sentences.
+4. Make prompts vivid, specific, and visually rich.
+5. DO NOT include the user's raw text; reinterpret it creatively.
+
+Example output format (structure only):
+[
+  "prompt 1...",
+  "prompt 2...",
+  "prompt 3..."
+]
+
+Now generate the 3 prompts.`
+      }
+    ];
+
+    const geminiResp = await axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+      { contents: [{ parts }] },
+      {
+        headers: {
+          "x-goog-api-key": process.env.GEMINI_API_KEY,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const rawText =
+      geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+
+    if (!rawText) {
+      console.error("[GENERATE PROMPTS] No text returned from Gemini");
+      return res.status(500).json({
+        success: false,
+        message: "No response from Gemini"
+      });
+    }
+
+    // Attempt to parse JSON cleanly
+    let prompts;
+    try {
+      prompts = JSON.parse(rawText);
+    } catch (err) {
+      // Fallback: split lines if Gemini didn't follow JSON perfectly
+      prompts = rawText.split("\n").filter((line) => line.trim());
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Prompts generated successfully",
+      data: prompts
+    });
+
+  } catch (error) {
+    console.error("[GENERATE PROMPTS] Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
